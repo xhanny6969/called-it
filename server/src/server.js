@@ -62,7 +62,9 @@ const engine = new Engine({
   hl,
   journal: async (text) => {
     if (!tg || !tgState.journalChatId) { log('journal (no Telegram chat yet):', text.split('\n')[0]); return }
-    await tg.sendMessage(tgState.journalChatId, text)
+    const m = await tg.sendMessage(tgState.journalChatId, text)
+    tgState.sent = [...(tgState.sent ?? []), m.message_id].slice(-100)
+    persist()
   },
 }, saved)
 engine.on('persist', persist)
@@ -209,6 +211,37 @@ const server = createServer(async (req, res) => {
       const m = JSON.parse((await body(req, 20_000)).toString())
       const r = await engine.ingest({ text: m.text, source: m.source || 'Dev feed', postedAt: m.postedAt, forwarded: Boolean(m.forwarded), chatId: m.chatId ?? 'dev' })
       return send(res, 200, { call: r.call ?? null, reply: r.reply ?? null })
+    }
+
+    // Demo reset: deletes the bot's journal messages and the live calls it read from your chats
+    // (posts in channels where the bot is admin), and forgets those calls and their paper trades.
+    if (DEV && url.pathname === '/api/dev/clean-demo' && req.method === 'POST') {
+      const live = engine.calls.filter((c) => !c.historical && typeof c.chatId === 'number')
+      let deleted = 0
+      if (tg) {
+        for (const c of live) if (c.msgId) deleted += await tg.deleteMessage(c.chatId, c.msgId).then(() => 1, () => 0)
+        for (const id of tgState.sent ?? []) deleted += await tg.deleteMessage(tgState.journalChatId, id).then(() => 1, () => 0)
+      }
+      // `sweep`: also clear the last N messages of the journal chat and of the watched channels
+      // (a probe message gives the newest id). For demo chats only.
+      const sweep = Math.min(Number(new URL(req.url, 'http://x').searchParams.get('sweep') || 0), 60)
+      if (tg && sweep) {
+        const chats = [tgState.journalChatId, ...[...engine.chats.keys()].map(Number).filter((id) => Number.isFinite(id) && id < 0)]
+        for (const chat of chats) {
+          const probe = await tg.sendMessage(chat, '·').catch(() => null)
+          if (!probe) continue
+          for (let id = probe.message_id; id > Math.max(probe.message_id - sweep, 1); id--) {
+            deleted += await tg.deleteMessage(chat, id).then(() => 1, () => 0)
+          }
+        }
+      }
+      tgState.sent = []
+      const ids = new Set(engine.calls.filter((c) => !c.historical).map((c) => c.id))
+      engine.calls = engine.calls.filter((c) => !ids.has(c.id))
+      engine.book.positions = engine.book.positions.filter((p) => !ids.has(p.callId))
+      engine.ui = { ...engine.ui, cardId: null, mode: 'browse', preview: null }
+      engine.changed('clean')
+      return send(res, 200, { deleted, forgotten: ids.size })
     }
 
     send(res, 404, { error: 'not found' })

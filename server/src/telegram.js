@@ -23,6 +23,7 @@ export function createTelegram({ token, fetchImpl = globalThis.fetch }) {
       call('getUpdates', { offset, timeout, allowed_updates: ['message', 'channel_post', 'edited_channel_post'] }, (timeout + 10) * 1000),
     sendMessage: (chatId, text, extra = {}) =>
       call('sendMessage', { chat_id: chatId, text, disable_web_page_preview: true, ...extra }),
+    deleteMessage: (chatId, messageId) => call('deleteMessage', { chat_id: chatId, message_id: messageId }),
   }
 }
 
