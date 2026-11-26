@@ -15,6 +15,12 @@ After a week you know which caller is worth listening to. You never risk a cent 
 
 *Simulator screenshots (576×288, monochrome green), prices are live Hyperliquid mainnet data.*
 
+## Track
+
+Crypto & DeFi (Hyperliquid: live prices and candles, read-only), with Messaging & News as the second
+track (Telegram: bot in channels and groups, forwarded calls, journal chat). Also entered for Best
+Telegram integration.
+
 ## What it does
 
 - **Reads calls from Telegram.** Add the bot to your call channel (or a group), or forward calls to it.
