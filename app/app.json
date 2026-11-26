@@ -1,0 +1,25 @@
+{
+  "package_id": "com.krakal.calledit",
+  "edition": "202601",
+  "name": "CalledIt",
+  "version": "0.1.0",
+  "min_sdk_version": "0.0.16",
+  "entrypoint": "index.html",
+  "permissions": [
+    {
+      "name": "network",
+      "desc": "Talks to your own CalledIt server for calls, prices, paper trades and speech-to-text.",
+      "whitelist": [
+        "http://127.0.0.1:8787",
+        "http://localhost:8787"
+      ]
+    },
+    {
+      "name": "g2-microphone",
+      "desc": "Push-to-talk: hold the touchpad and say \"paper fifty\", \"skip\" or \"close it\"."
+    }
+  ],
+  "supported_languages": [
+    "en"
+  ]
+}
