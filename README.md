@@ -44,6 +44,25 @@ Hyperliquid is used read-only (prices and candles from the public info API). Pap
 ($250 by default). The only secret is your Telegram bot token, and it lives on your server, never in
 the glasses app.
 
+## What it found on four public channels
+
+`tools/tg-history.mjs` reads a public channel's history from its web preview, and every call went
+through the same parser and grader the bot uses. 232 calls from four free signal channels, posted
+between May 27 and Nov 26, 2026, graded on Hyperliquid candles (TP1 against the stop):
+
+| Channel | Won | Lost | Win rate | Total |
+|---|---|---|---|---|
+| @cryptosignals0rg | 13 | 19 | 41% | **+4.9R** |
+| @TradingGainX | 18 | 19 | 49% | +1.1R |
+| @Binance_Futures_Trades | 12 | 4 (5 still open) | 75% | +0.2R |
+| @vip_crypto_signal_free | 64 | 24 | **73%** | **−8.1R** |
+
+The channel with the best win rate is the only one losing money: its first target sits much closer
+than its stop, so it wins often and small and loses big. A win rate says nothing without the R.
+Four larger "Rose" signal channels (100k+ subscribers each, 700+ posts) could not be graded at all:
+not one post named a stop loss. 37 calls never reached their entry within 48 hours and 16 were
+skipped (a BTC/ETH cross pair Hyperliquid does not list).
+
 ## Grading rules (conservative on purpose)
 
 - A call fills like a limit order inside its entry zone within **48 h** of being posted; otherwise it
@@ -82,8 +101,11 @@ Hyperliquid info API (read-only) ─────────────┘     
     `engine.js` is the state machine behind the cards, `views.js` writes the card text,
     `intent.js` turns a transcript into an action, `stt.js` runs Whisper locally,
     `telegram.js` long-polls the Bot API.
-- Tests: `cd server && npm test` (37 tests: parser, grading, paper book, voice intents end to end
-  through Whisper, and the engine with a fake market).
+- Tests: `cd server && npm test` (44 tests: the parser on real channel formats, grading, the paper
+  book, voice intents end to end through Whisper, the engine with a fake market, and the Hyperliquid
+  client's candle cache, weight budget and 429 backoff).
+- `tools/tg-history.mjs <channel> [days]`: pulls a public channel's history (t.me/s web preview) and
+  shows which posts CalledIt reads as calls.
 
 ## Run it
 
@@ -118,6 +140,12 @@ curl -X POST http://127.0.0.1:8787/api/dev/message -H 'content-type: application
 On a phone, run the server on your LAN (`HOST=0.0.0.0`), open the app with `?api=http://<server-ip>:8787`
 and add that address to the `network` whitelist in `app/app.json`. `npx evenhub pack app.json dist`
 builds the `.ehpk`.
+
+## Built during the hackathon
+
+Everything in this repository was written for Heads Up (from Nov 23, 2026). It uses these existing
+pieces: the Even Hub SDK, CLI and simulator, the Telegram Bot API, Hyperliquid's public info API,
+`@huggingface/transformers` with the `Xenova/whisper-tiny.en` model, Vite and TypeScript.
 
 ## Limits
 
