@@ -49,7 +49,14 @@ function persist() {
 // ---- wiring -----------------------------------------------------------------
 
 const hl = createHyperliquid({ network: process.env.HL_NETWORK || 'mainnet' })
-const tg = process.env.TELEGRAM_BOT_TOKEN ? createTelegram({ token: process.env.TELEGRAM_BOT_TOKEN }) : null
+// Long-poll waiters for /api/view; declared early because engine events can fire
+// while startup is still awaiting Telegram.
+const waiters = new Set()
+
+// A bot token looks like 1234567890:AAF... Anything else (a pasted key, a hash) is never sent anywhere.
+const BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim()
+const TOKEN_OK = /^\d{6,12}:[A-Za-z0-9_-]{30,}$/.test(BOT_TOKEN)
+let tg = TOKEN_OK ? createTelegram({ token: BOT_TOKEN }) : null
 
 const engine = new Engine({
   hl,
@@ -111,18 +118,27 @@ async function onTelegram(msg) {
   }
 }
 
+let me = null
 if (tg) {
-  const me = await tg.getMe()
+  try {
+    me = await tg.getMe()
+  } catch (e) {
+    log(`Telegram: off (${e.message}; check TELEGRAM_BOT_TOKEN in server/.env)`)
+    tg = null
+  }
+}
+if (tg) {
   log(`Telegram: @${me.username}${tgState.journalChatId ? ', journal chat set' : ', send /start to the bot to link your journal'}`)
   const cursor = { get offset() { return tgState.offset }, set offset(v) { tgState.offset = v; persist() } }
   pollForever({ tg, cursor, onMessage: onTelegram, onError: (e) => log('telegram', e.message) })
-} else {
+} else if (BOT_TOKEN && !TOKEN_OK) {
+  log('Telegram: off (TELEGRAM_BOT_TOKEN in server/.env does not look like a bot token: expected 1234567890:AAF..., from @BotFather)')
+} else if (!BOT_TOKEN) {
   log('Telegram: off (set TELEGRAM_BOT_TOKEN in server/.env)')
 }
 
 // ---- HTTP -------------------------------------------------------------------
 
-const waiters = new Set()
 function wake() {
   for (const w of waiters) w()
   waiters.clear()
