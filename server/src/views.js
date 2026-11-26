@@ -35,6 +35,16 @@ function zoneNote(t, mid) {
   return `${(pct * 100).toFixed(1)}% ${where} the zone`
 }
 
+/** A live call that can no longer be taken: price already through the stop or TP1. */
+export function lateNote(t, mid) {
+  if (!Number.isFinite(mid) || !Number.isFinite(t.sl)) return null
+  const long = t.side === 'long'
+  if (long ? mid <= t.sl : mid >= t.sl) return 'already past the stop'
+  const tp = t.tps?.[0]
+  if (Number.isFinite(tp) && (long ? mid >= tp : mid <= tp)) return 'TP1 already hit'
+  return null
+}
+
 export function record(score) {
   if (!score || score.wins + score.losses === 0) {
     return score?.calls > 1 ? `Caller: ${score.calls} calls, none closed yet` : 'Caller: no track record yet'
@@ -53,16 +63,17 @@ export function bar(sl, tp, mid, width = 12) {
 export function callCard(call, { mid, score, size, now, pos }) {
   const t = call.ticket
   const entry = t.entry ? (t.entry.lo === t.entry.hi ? px(t.entry.lo) : `${px(t.entry.lo)}–${px(t.entry.hi)}`) : 'market'
+  const late = lateNote(t, mid)
   return {
     header: `NEW CALL · ${call.source} · ${ago(now - call.postedAt)}${pos}`,
     body: [
       `${arrow(t.side)} ${name(t.coin)}${t.leverage ? `  ${t.leverage}x` : ''}`,
       `Entry ${entry}   SL ${px(t.sl)}`,
       `TP ${t.tps.slice(0, 3).map(px).join(' · ')}`,
-      `Now ${px(mid)}   ${zoneNote(t, mid)}`,
+      `Now ${px(mid)}   ${late ? `${late}, too late` : zoneNote(t, mid)}`,
       record(score),
     ].join('\n'),
-    footer: `tap  paper $${size}      hold  speak      swipe  next`,
+    footer: late ? 'too late to paper      hold  speak      swipe  next' : `tap  paper $${size}      hold  speak      swipe  next`,
   }
 }
 

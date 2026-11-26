@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { gradeCall, scoreboard, FILL_WINDOW_MS } from '../src/grade.js'
 import { PaperBook } from '../src/paper.js'
+import { callCard, lateNote } from '../src/views.js'
 
 const T0 = Date.UTC(2026, 10, 25, 12, 0)
 const MIN = 60_000
@@ -107,4 +108,17 @@ test('paper: mark closes at the stop and at TP1, manual close books PnL', () => 
   const done = book.close(a.id, 71.5)
   assert.equal(done.position.pnlUsd, 0.71)
   assert.equal(book.open().length, 0)
+})
+
+test('a call already through its stop or TP1 is shown as too late, with no paper action', () => {
+  assert.equal(lateNote(long, 67.5), 'already past the stop')
+  assert.equal(lateNote(long, 74.2), 'TP1 already hit')
+  assert.equal(lateNote(long, 70.5), null)
+  assert.equal(lateNote(short, 62600), 'already past the stop')
+  const call = { source: 'Desk', postedAt: T0, ticket: long }
+  const late = callCard(call, { mid: 67.5, score: null, size: 50, now: T0 + MIN, pos: '' })
+  assert.match(late.body, /already past the stop, too late/)
+  assert.doesNotMatch(late.footer, /paper \$/)
+  const live = callCard(call, { mid: 70.5, score: null, size: 50, now: T0 + MIN, pos: '' })
+  assert.match(live.footer, /tap  paper \$50/)
 })
