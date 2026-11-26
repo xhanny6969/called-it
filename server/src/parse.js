@@ -91,6 +91,16 @@ const TOKEN = new RegExp(
 export function extractLevels(lower) {
   // Leverage ("5x", "x10", "lev 20") and tickers are not price levels.
   const clean = lower
+    // List numbering and level labels are not prices: "1) 105.51", "target 1: 0.059", "tp 2 - 64.6", "1️⃣".
+    .replace(/[0-9]\ufe0f?\u20e3/g, ' ')
+    .replace(/\b(tp|targets?|take ?profit)\s?[1-9]\d?\s*(?::|\))/g, '$1 ')
+    .replace(/\b(tp|targets?|take ?profit)\s?[1-9]\s*(?:\.(?=\s)|\s[-–]\s)/g, '$1 ')
+    // Scores and timeframes are not prices: "signal strength 46.0/100", "tf: 15".
+    .replace(/\d+(?:\.\d+)?\s*\/\s*100\b/g, ' ')
+    .replace(/\b(?:tf|timeframe|time ?frame)\s*[:=]?\s*\d+\s*[a-z]?\b/g, ' ')
+    .replace(/(^|[\s:(\[])\d{1,2}\)\s/g, '$1 ')
+    // Risk/reward ratios are not prices: "RRR 1:1.4", "R:R 1/3".
+    .replace(/\b(?:r{2,3}|r:r|r\/r|risk ?(?:to|:|\/)? ?reward)\s*[:=]?\s*\d+(?:\.\d+)?\s*[:/]\s*\d+(?:\.\d+)?/g, ' ')
     .replace(/\blev(?:erage)?\s*[:=]?\s*\d{1,3}\s*x?\b/g, ' ')
     .replace(/\b\d{1,3}\s?x\b|\bx\s?\d{1,3}\b/g, ' ')
     .replace(/[$#][a-z0-9]+/g, ' ')

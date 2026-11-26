@@ -95,3 +95,21 @@ test('a call without a stop is skipped', () => {
 test('unknown ticker is skipped', () => {
   assert.equal(p('LONG $NOTACOINXYZ entry 1 sl 0.9 tp 1.2'), null)
 })
+
+test('numbered lists, "Target 1:" labels and risk/reward ratios are not read as prices', () => {
+  const vip = p('🔴 SHORT\n\n👉 Strategy : Swing Strategy\n\n#SOL/USDT\n\nEntry :\n\n1) 105.5100\n2) 108.6753\n\nTargets :\n\n1) 104.8920\n2) 102.6647\n3) 100.4375\n4) 98.21031\n\nStop : 112.1571\n\nLeverage : 10x (isolated)')
+  assert.deepEqual([vip.side, vip.coin, vip.entry, vip.sl, vip.tps, vip.invalid], ['short', 'SOL', { lo: 105.51, hi: 108.6753 }, 112.1571, [104.892, 102.6647, 100.4375, 98.21031], undefined])
+  const labelled = p('#HYPE/USDT - Short🔴\n\nEntry: 65.125\nStop Loss: 65.66345\n\nTarget 1: 64.88874\nTarget 2: 64.62644\n\nLeverage: x16')
+  assert.deepEqual([labelled.entry, labelled.sl, labelled.tps], [{ lo: 65.125, hi: 65.125 }, 65.66345, [64.88874, 64.62644]])
+  const rrr = p('Sell Limit SOLUSD\n\n📍 Entry: 84.193\n🛑 SL: 88.047\n🎯 TP: 78.867\n⚡ RRR: 1:1.4')
+  assert.deepEqual([rrr.side, rrr.coin, rrr.sl, rrr.tps], ['short', 'SOL', 88.047, [78.867]])
+})
+
+test('signal-strength scores, timeframes and "Target 10:" labels are not read as prices', () => {
+  const scored = p('COIN: #XRPUSDT Leverage: 10x Direction: SHORT | Type: Swing Pullback ⭐ Signal Strength: 46.0/100 ➖➖➖ ENTRY: 1.113 - 1.117 TARGETS: 1.102 - 1.082 - 1.048 - 0.981 STOP LOSS: 1.204')
+  assert.deepEqual([scored.side, scored.coin, scored.entry, scored.sl, scored.tps[0], scored.invalid], ['short', 'XRP', { lo: 1.113, hi: 1.117 }, 1.204, 1.102, undefined])
+  const tf = p('🔴 TREND SNIPER SHORT!\n📊 Coin: RENDERUSDT.P\n⏱ TF: 15\n💰 Entry: 2.292\n🛑 SL: 2.3443\n🎯 TP1: 2.2554\n🎯 TP2: 2.1873')
+  assert.deepEqual([tf.coin, tf.entry, tf.sl, tf.tps], ['RENDER', { lo: 2.292, hi: 2.292 }, 2.3443, [2.2554, 2.1873]])
+  const ten = p('#SUI/USDT - Short🔴  Entry: 0.7613 Stop Loss: 0.83736  Target 1: 0.75199 Target 9: 0.73407 Target 10: 0.73158  Leverage: x31')
+  assert.deepEqual(ten.tps, [0.75199, 0.73407, 0.73158])
+})
