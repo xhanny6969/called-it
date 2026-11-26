@@ -116,7 +116,10 @@ export class Engine extends EventEmitter {
     if (this.now() - this.lastRegrade > 60_000) {
       this.lastRegrade = this.now()
       const active = this.calls.filter((c) => !c.ticket.invalid && (!c.grade || ['waiting', 'open'].includes(c.grade.status)))
+      const before = JSON.stringify(active.map((c) => c.grade ?? null))
       for (const c of active.slice(-40)) await this.regrade(c)
+      // Grades that moved must reach the state file, or a restart regrades from scratch.
+      if (JSON.stringify(active.map((c) => c.grade ?? null)) !== before) this.emit('persist')
     }
     this.refresh()
   }

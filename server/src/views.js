@@ -120,7 +120,7 @@ export function closeCard(p, { mid, pnl }) {
 export function scoreCard(scores, { pos, graded }) {
   const top = scores.filter((s) => s.wins + s.losses > 0).slice(0, 4)
   const body = top.length
-    ? top.map((s, i) => `${i + 1}. ${s.source.slice(0, 22)}   ${s.wins}W ${s.losses}L   ${rr(s.totalR)}`).join('\n')
+    ? top.map((s, i) => `${i + 1}. ${s.source.slice(0, 24)}   ${s.wins}W ${s.losses}L   ${rr(s.totalR)}`).join('\n')
     : 'No closed calls yet.\nForward a caller\'s old calls to the bot\nand they are graded on Hyperliquid.'
   return {
     header: `CALLER SCORES · ${graded} calls graded${pos}`,
