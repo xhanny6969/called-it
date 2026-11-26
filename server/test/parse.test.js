@@ -113,3 +113,7 @@ test('signal-strength scores, timeframes and "Target 10:" labels are not read as
   const ten = p('#SUI/USDT - Short🔴  Entry: 0.7613 Stop Loss: 0.83736  Target 1: 0.75199 Target 9: 0.73407 Target 10: 0.73158  Leverage: x31')
   assert.deepEqual(ten.tps, [0.75199, 0.73407, 0.73158])
 })
+
+test('an English word that is also a ticker ("not", "near") is not taken for the coin', () => {
+  assert.equal(p('Buy Limit BTCETH\nEntry: 35.35405\nSL: 35.31342\nTP: 35.44102\nThis order becomes invalid if not triggered within 24 hours.'), null)
+})

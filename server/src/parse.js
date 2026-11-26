@@ -34,6 +34,9 @@ export function toNumber(text) {
 }
 
 /** Maps a quoted ticker onto a Hyperliquid perp; PEPE is listed as kPEPE (1000 units). */
+// Ordinary English words that are also tickers: only $NOT / #NOT / NOTUSDT / NOT in capitals count.
+const LOWER_WORDS = new Set(['not', 'near', 'one', 'any', 'all', 'win', 'key', 'max', 'hot', 'sun', 'ray', 'well', 'just', 'now', 'new', 'can', 'get', 'are', 'io', 'me', 'pump', 'move', 'meme', 'zero', 'fun', 'ace', 'big', 'mask', 'gas', 'ark', 'ai', 'blur', 'core', 'dog', 'cat'])
+
 export function resolveCoin(sym, universe) {
   if (!universe) return { coin: sym, scale: 1, quoted: sym }
   if (universe.has(sym)) return { coin: sym, scale: 1, quoted: sym }
@@ -56,6 +59,7 @@ export function findCoin(text, universe) {
   for (const m of text.matchAll(/\b([A-Z][A-Z0-9]{1,9})\b/g)) push(m[1], m.index, false)
   // Lower-case names ("sol long here") count only when the market lists them.
   for (const m of text.matchAll(/\b([a-z][a-z0-9]{1,9})\b/g)) {
+    if (LOWER_WORDS.has(m[1])) continue
     if (universe?.has(m[1].toUpperCase())) push(m[1], m.index, false)
   }
   candidates.sort((a, b) => (b.strong - a.strong) || (a.index - b.index))
