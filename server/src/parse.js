@@ -8,8 +8,14 @@
 // better skipped than guessed.
 
 const SIDE_WORDS = [
-  [/\b(long|longs|longing|buy|bought|bid)\b|🟢|📈/i, 'long'],
-  [/\b(short|shorts|shorting|sell|sold)\b|🔴|📉/i, 'short'],
+  [/\b(long|longs|longing|buy|bought|bid)\b/i, 'long'],
+  [/\b(short|shorts|shorting|sell|sold)\b/i, 'short'],
+]
+// Colour and chart emoji are decoration in many layouts ("📈 Direction: 🔴 SHORT"),
+// so they decide the side only when no word does.
+const SIDE_EMOJI = [
+  [/🟢|📈/, 'long'],
+  [/🔴|📉/, 'short'],
 ]
 
 // Words that look like tickers but are never the coin being called.
@@ -19,6 +25,8 @@ const STOP_TICKERS = new Set([
   'NFA', 'DYOR', 'ATH', 'ATL', 'RR', 'PNL', 'ROI', 'BE', 'TF', 'HTF', 'LTF', 'X', 'AND', 'THE',
   'FOR', 'ON', 'AT', 'IN', 'TO', 'OF', 'OR', 'IT', 'IS', 'A', 'I', 'ME', 'MY', 'UP', 'GO', 'NEW',
   'SIGNAL', 'CALL', 'SCALP', 'SWING', 'TRADE', 'SETUP', 'HERE', 'LIMIT', 'MARKET', 'OPEN', 'CLOSE',
+  // Binance lists these as coins too, but in a call post they are words.
+  'ORDER', 'TAKE', 'PROFIT', 'US', 'RE', 'ALL', 'ONE', 'SAFE', 'SIGN',
 ])
 
 export function toNumber(text) {
@@ -33,19 +41,36 @@ export function toNumber(text) {
   return Number.isFinite(n) ? n * mult : NaN
 }
 
-/** Maps a quoted ticker onto a Hyperliquid perp; PEPE is listed as kPEPE (1000 units). */
+/** Maps a quoted ticker onto a Binance perp; PEPE is listed as 1000PEPE (1000 units). */
 // Ordinary English words that are also tickers: only $NOT / #NOT / NOTUSDT / NOT in capitals count.
-const LOWER_WORDS = new Set(['not', 'near', 'one', 'any', 'all', 'win', 'key', 'max', 'hot', 'sun', 'ray', 'well', 'just', 'now', 'new', 'can', 'get', 'are', 'io', 'me', 'pump', 'move', 'meme', 'zero', 'fun', 'ace', 'big', 'mask', 'gas', 'ark', 'ai', 'blur', 'core', 'dog', 'cat'])
+const LOWER_WORDS = new Set(['not', 'near', 'one', 'any', 'all', 'win', 'key', 'max', 'hot', 'sun', 'ray', 'well', 'just', 'now', 'new', 'can', 'get', 'are', 'io', 'me', 'pump', 'move', 'meme', 'zero', 'fun', 'ace', 'big', 'mask', 'gas', 'ark', 'ai', 'blur', 'core', 'dog', 'cat',
+  // English words that are also Binance USD-M tickers
+  'act', 'ape', 'arc', 'auction', 'baby', 'ban', 'banana', 'band', 'bank', 'based', 'bat', 'beat', 'bill', 'bless', 'cap', 'chip',
+  'collect', 'cookie', 'cow', 'cross', 'deep', 'dogs', 'edge', 'era', 'fight', 'flow', 'flux', 'form', 'genius', 'giggle', 'grass',
+  'gun', 'hive', 'home', 'hyper', 'idol', 'in', 'init', 'kernel', 'lab', 'layer', 'light', 'lit', 'magic', 'mega', 'met', 'night',
+  'nil', 'on', 'open', 'order', 'people', 'pixel', 'play', 'portal', 'power', 'predict', 'prove', 'rare', 'rave', 're', 'recall',
+  'red', 'river', 'rose', 'safe', 'sand', 'saga', 'sent', 'shell', 'sign', 'siren', 'sky', 'sonic', 'soon', 'space', 'spell',
+  'stable', 'star', 'super', 'syrup', 'tag', 'take', 'the', 'tree', 'trust', 'truth', 'turbo', 'turtle', 'us', 'useless', 'usual',
+  'velvet', 'virtual', 'wet', 'zest'])
 
 export function resolveCoin(sym, universe) {
   if (!universe) return { coin: sym, scale: 1, quoted: sym }
   if (universe.has(sym)) return { coin: sym, scale: 1, quoted: sym }
-  if (universe.has('k' + sym)) return { coin: 'k' + sym, scale: 1000, quoted: sym }
-  if (sym.startsWith('1000') && universe.has('k' + sym.slice(4))) {
-    return { coin: 'k' + sym.slice(4), scale: 1, quoted: sym }
+  // Binance lists small-unit coins per 1000 or per million: PEPE trades as 1000PEPE,
+  // MOG as 1000000MOG, BABYDOGE as 1MBABYDOGE. A caller quoting per coin needs the scale.
+  for (const [prefix, scale] of UNIT_PREFIXES) {
+    if (universe.has(prefix + sym)) return { coin: prefix + sym, scale, quoted: sym }
+  }
+  // Already quoted per unit ("1000PEPE", "kPEPE") but listed under another prefix.
+  for (const [prefix] of UNIT_PREFIXES) {
+    if (!sym.startsWith(prefix) || sym.length <= prefix.length) continue
+    const base = sym.slice(prefix.length)
+    for (const [other] of UNIT_PREFIXES) if (universe.has(other + base)) return { coin: other + base, scale: 1, quoted: sym }
   }
   return null
 }
+
+const UNIT_PREFIXES = [['1000', 1000], ['1000000', 1_000_000], ['1M', 1_000_000], ['k', 1000]]
 
 export function findCoin(text, universe) {
   const candidates = []
@@ -70,13 +95,17 @@ export function findCoin(text, universe) {
   return null
 }
 
-function findSide(text) {
+function earliest(text, table) {
   let best = null
-  for (const [re, side] of SIDE_WORDS) {
+  for (const [re, side] of table) {
     const m = re.exec(text)
     if (m && (!best || m.index < best.index)) best = { side, index: m.index }
   }
   return best?.side ?? null
+}
+
+function findSide(text) {
+  return earliest(text, SIDE_WORDS) ?? earliest(text, SIDE_EMOJI)
 }
 
 // One pass over the message: labels switch the "slot", numbers fill it.
@@ -87,7 +116,8 @@ const TOKEN = new RegExp(
     String.raw`(?<entry>\bentry\s*zone\b|\b(?:buy|sell)\s*zone\b|\bentries\b|\bentry\b|\benter\b|\bzone\b|\bin\s+at\b|\bopened?\s+at\b|\blimit\b|@)`,
     String.raw`(?<side>\blong\b|\bshort\b|\bbuy\b|\bsell\b|\blonging\b|\bshorting\b)`,
     String.raw`(?<market>\bcmp\b|\bmarket\b|\bmkt\b)`,
-    String.raw`(?<num>(?<![a-z0-9.$#])\d+(?:[.,]\d+)*(?:\s?k(?![a-z]))?(?![a-z0-9%]))`,
+    // A number never ends inside another one: "+ 0.2%" must not yield "0".
+    String.raw`(?<num>(?<![a-z0-9.$#])\d+(?:[.,]\d+)*(?:\s?k(?![a-z]))?(?![a-z0-9%]|[.,]\d))`,
   ].join('|'),
   'gi',
 )
@@ -97,8 +127,15 @@ export function extractLevels(lower) {
   const clean = lower
     // List numbering and level labels are not prices: "1) 105.51", "target 1: 0.059", "tp 2 - 64.6", "1️⃣".
     .replace(/[0-9]\ufe0f?\u20e3/g, ' ')
+    // Labels in brackets: "Target 1 (TP1):", "TP1 (50%):", "Stop Loss (SL):".
+    .replace(/\(\s*(?:tp\s?\d{1,2}|sl|\d{1,3}(?:\.\d+)?\s?%)\s*\)/g, ' ')
     .replace(/\b(tp|targets?|take ?profit)\s?[1-9]\d?\s*(?::|\))/g, '$1 ')
     .replace(/\b(tp|targets?|take ?profit)\s?[1-9]\s*(?:\.(?=\s)|\s[-–]\s)/g, '$1 ')
+    // Numbered entries: "Entry :1 : 0.0342  Entry :2 : 0.03625", "Entry Zone 1: 1.962".
+    .replace(/\b(entry(?:\s*zone)?|entries)\s*:?\s*[1-9]\s*(?::|\))/g, '$1 ')
+    // Dates and clock times are not prices: "2026-08-12 02:15:00", "12:44".
+    .replace(/\b\d{4}-\d{2}-\d{2}\b/g, ' ')
+    .replace(/\b\d{1,2}:\d{2}(?::\d{2})?\b/g, ' ')
     // Scores and timeframes are not prices: "signal strength 46.0/100", "tf: 15".
     .replace(/\d+(?:\.\d+)?\s*\/\s*100\b/g, ' ')
     .replace(/\b(?:tf|timeframe|time ?frame)\s*[:=]?\s*\d+\s*[a-z]?\b/g, ' ')
@@ -111,8 +148,12 @@ export function extractLevels(lower) {
   const slots = { entry: [], sl: [], tp: [] }
   let slot = null
   let market = false
+  let last = 0
   for (const m of clean.matchAll(TOKEN)) {
     const g = m.groups
+    // Prose after the targets or the stop ("broke above its range high at 0.0253") adds no level.
+    if ((slot === 'tp' || slot === 'sl') && (clean.slice(last, m.index).match(/[a-z]{2,}/g)?.length ?? 0) >= 4) slot = null
+    last = m.index + m[0].length
     if (g.sl) slot = 'sl'
     else if (g.tp) slot = 'tp'
     else if (g.entry) slot = 'entry'

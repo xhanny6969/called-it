@@ -30,6 +30,6 @@ export function intentOf(text) {
   if (/\b(positions?|my trades|open trades)\b/.test(t)) return { type: 'positions' }
   const usd = spokenAmount(t)
   if (usd) return { type: 'size', usd }
-  if (/\b(yes|yeah|yep|confirm|do it|go|send it|paper it|take it|ok(ay)?)\b/.test(t)) return { type: 'confirm' }
+  if (/\b(yes|yeah|yep|confirm|do it|go|send it|paper it|demo it|buy it|place it|take it|ok(ay)?)\b/.test(t)) return { type: 'confirm' }
   return { type: 'unknown' }
 }

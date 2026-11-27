@@ -1,13 +1,13 @@
 // CalledIt on Even G2: a thin client.
 //
-// The glasses show one card at a time (a new call, an open paper position, or
-// the caller scoreboard). Everything else (parsing Telegram, prices, paper
-// fills, the journal, speech-to-text) lives on the CalledIt server, so no key
+// The glasses show one card at a time (a new call, an open position, or the
+// caller scoreboard). Everything else (parsing Telegram, prices, Binance demo
+// orders, the journal, speech-to-text) lives on the CalledIt server, so no key
 // or token ever ships inside this app.
 //
-//   tap         do what the footer says (paper it / confirm / close / post)
+//   tap         do what the footer says (take it / confirm / close / post)
 //   swipe       next or previous card; on a confirm card it cancels
-//   hold        push-to-talk: "paper fifty", "skip", "close it"
+//   hold        push-to-talk: "take fifty", "skip", "close it"
 //   double-tap  exit (system dialog)
 
 import {

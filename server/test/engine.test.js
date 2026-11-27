@@ -5,21 +5,22 @@ import { Engine } from '../src/engine.js'
 const MIN = 60_000
 const T0 = Date.UTC(2026, 10, 26, 9, 0)
 
-function fakeHl({ mids, candles = {} }) {
+function fakeMarket({ mids, candles = {} }) {
   return {
-    universe: async () => new Set(['BTC', 'ETH', 'SOL', 'HYPE', 'kPEPE']),
+    universe: async () => new Set(['BTC', 'ETH', 'SOL', 'HYPE', '1000PEPE']),
+    symbolOf: (coin) => `${coin}USDT`,
     mids: async () => ({ ...mids }),
     candles: async (coin, interval, start) => (candles[coin] ?? []).filter((k) => k.t >= start),
   }
 }
 
-async function setup({ mids = { SOL: 70.5, BTC: 61000 }, candles, now = T0 } = {}) {
+async function setup({ mids = { SOL: 70.5, BTC: 61000 }, candles, now = T0, broker } = {}) {
   const journal = []
   const clock = { t: now }
-  const hl = fakeHl({ mids, candles })
-  const e = new Engine({ hl, journal: async (text) => journal.push(text), now: () => clock.t })
+  const market = fakeMarket({ mids, candles })
+  const e = new Engine({ market, broker, journal: async (text) => journal.push(text), now: () => clock.t })
   await e.init()
-  return { e, journal, clock, hl, mids }
+  return { e, journal, clock, market, mids }
 }
 
 const SOL_CALL = '🚀 LONG $SOL\nEntry 70.2 - 70.8\nSL 68.5\nTP 73 / 75.5'
@@ -77,11 +78,11 @@ test('voice: "Skip this one." drops the call from the deck', async () => {
 })
 
 test('price through TP1 closes the paper trade and journals the win', async () => {
-  const { e, journal, hl } = await setup()
+  const { e, journal, market } = await setup()
   await e.ingest({ text: SOL_CALL, source: 'Alpha Desk', postedAt: T0 })
   await e.input('tap')
   await e.input('tap')
-  hl.mids = async () => ({ SOL: 73.1, BTC: 61000 })
+  market.mids = async () => ({ SOL: 73.1, BTC: 61000 })
   await e.tick()
   await new Promise((r) => setImmediate(r))
   assert.equal(e.book.open().length, 0)

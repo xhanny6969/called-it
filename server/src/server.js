@@ -2,8 +2,8 @@
 //
 //   Telegram (bot in your call channels, or forwards) ─┐
 //                                                      ├─> Engine ──> /api/view (long-poll) ──> G2 app
-//   Hyperliquid (prices, candles, read-only) ──────────┘      ^
-//                                                               └── /api/input, /api/voice <── G2 app
+//   Binance USD-M (prices, candles: public API) ───────┤      ^
+//   Binance demo trading (orders, with a demo key) <───┘      └── /api/input, /api/voice <── G2 app
 //
 // Secrets stay here. The glasses app only ever talks to this server.
 
@@ -13,7 +13,8 @@ import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Engine } from './engine.js'
-import { createHyperliquid } from './hyperliquid.js'
+import { createBinance, createBinanceDemo } from './binance.js'
+import { DemoBroker } from './broker.js'
 import { createTelegram, pollForever } from './telegram.js'
 import { transcribe, warmUp } from './stt.js'
 import { journalScores, describeTicket } from './views.js'
@@ -48,7 +49,7 @@ function persist() {
 
 // ---- wiring -----------------------------------------------------------------
 
-const hl = createHyperliquid({ network: process.env.HL_NETWORK || 'mainnet' })
+const market = createBinance()
 // Long-poll waiters for /api/view; declared early because engine events can fire
 // while startup is still awaiting Telegram.
 const waiters = new Set()
@@ -58,8 +59,16 @@ const BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || '').trim()
 const TOKEN_OK = /^\d{6,12}:[A-Za-z0-9_-]{30,}$/.test(BOT_TOKEN)
 let tg = TOKEN_OK ? createTelegram({ token: BOT_TOKEN }) : null
 
+// Binance demo trading key (demo.binance.com > API Management). The client can only reach
+// the demo host, so even a real-account key pasted here could not move real funds.
+const BN_KEY = (process.env.BINANCE_API_KEY || '').trim()
+const BN_SECRET = (process.env.BINANCE_API_SECRET || '').trim()
+const BN_OK = /^[A-Za-z0-9]{32,128}$/.test(BN_KEY) && /^[A-Za-z0-9]{32,128}$/.test(BN_SECRET)
+const demo = BN_OK ? createBinanceDemo({ apiKey: BN_KEY, apiSecret: BN_SECRET }) : null
+
 const engine = new Engine({
-  hl,
+  market,
+  broker: demo ? (book) => new DemoBroker(book, demo, { symbolOf: market.symbolOf, log: (m) => log('binance', m) }) : null,
   journal: async (text) => {
     if (!tg || !tgState.journalChatId) { log('journal (no Telegram chat yet):', text.split('\n')[0]); return }
     const m = await tg.sendMessage(tgState.journalChatId, text)
@@ -71,8 +80,17 @@ engine.on('persist', persist)
 engine.on('warn', (m) => log('warn', m))
 engine.on('view', ({ version, reason }) => { wake(); if (reason !== 'tick') log(`view v${version} (${reason})`) })
 
-await engine.init()
-log(`Hyperliquid ${hl.network}: ${engine.universe.size} perps, ${Object.keys(engine.mids).length} prices`)
+const orders = await engine.init()
+log(`Binance USD-M: ${engine.universe.size} perps, ${Object.keys(engine.mids).length} prices`)
+if (orders.label === 'demo') {
+  log(`Orders: Binance demo, ${orders.hedge ? 'hedge' : 'one-way'} mode, ${orders.balance ?? '?'} USDT available, clock offset ${orders.offsetMs} ms`)
+} else if (engine.brokerError) {
+  log(`Orders: paper (Binance demo refused the key: ${engine.brokerError})`)
+} else if (BN_KEY || BN_SECRET) {
+  log('Orders: paper (BINANCE_API_KEY / BINANCE_API_SECRET in server/.env do not look like Binance keys)')
+} else {
+  log('Orders: paper (put a demo.binance.com key in BINANCE_API_KEY and BINANCE_API_SECRET in server/.env)')
+}
 setInterval(() => engine.tick(), Number(process.env.TICK_MS || 3000))
 warmUp().then((ok) => log(ok ? 'speech-to-text ready (Whisper, local)' : 'speech-to-text unavailable: run npm run fetch-model'))
 
@@ -82,11 +100,11 @@ const HELP = [
   'CalledIt reads trade calls and puts them on your Even G2.',
   '',
   '• Add me as an admin to your call channel (or a group with privacy off): new calls go straight to your glasses.',
-  '• Forward old calls here: I grade each one on Hyperliquid candles and keep a score per caller.',
-  '• Paper trades you take on the glasses are logged in this chat.',
+  '• Forward old calls here: I grade each one on Binance futures candles and keep a score per caller.',
+  '• Calls you take on the glasses are orders on your Binance demo account (no real funds), logged in this chat.',
   '',
   '/score  caller scoreboard',
-  '/size 100  default paper size in USD',
+  '/size 100  default order size in USD',
 ].join('\n')
 
 async function onTelegram(msg) {
@@ -107,7 +125,7 @@ async function onTelegram(msg) {
     if (cmd === '/score') return void (await tg.sendMessage(msg.chatId, journalScores(engine.scores())))
     if (cmd === '/size') {
       const n = Number(arg)
-      if (n > 0 && n <= engine.book.maxSize) { engine.setDefaultSize(n); await tg.sendMessage(msg.chatId, `Default paper size: $${n}`) }
+      if (n > 0 && n <= engine.book.maxSize) { engine.setDefaultSize(n); await tg.sendMessage(msg.chatId, `Default order size: $${n}`) }
       else await tg.sendMessage(msg.chatId, `Usage: /size 50 (max $${engine.book.maxSize})`)
       return
     }
@@ -116,7 +134,7 @@ async function onTelegram(msg) {
   if (call) log(`call ${call.id} from ${call.source}: ${describeTicket(call.ticket)}${call.historical ? ' [graded]' : ''}`)
   // Answer in the private chat only; never post into someone's channel or group.
   if (msg.chatType === 'private') {
-    await tg.sendMessage(msg.chatId, reply ?? 'Not a call I can read. I need a side, a coin listed on Hyperliquid, a stop and a target.', { reply_to_message_id: msg.msgId })
+    await tg.sendMessage(msg.chatId, reply ?? 'Not a call I can read. I need a side, a coin with a Binance USD-M perpetual, a stop and a target.', { reply_to_message_id: msg.msgId })
   }
 }
 
@@ -174,7 +192,7 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`)
   try {
     if (req.method === 'OPTIONS') return send(res, 204, {})
-    if (url.pathname === '/api/health') return send(res, 200, { ok: true, telegram: Boolean(tg), journal: Boolean(tgState.journalChatId) })
+    if (url.pathname === '/api/health') return send(res, 200, { ok: true, telegram: Boolean(tg), journal: Boolean(tgState.journalChatId), orders: engine.broker.label })
 
     if (url.pathname === '/api/view' && req.method === 'GET') {
       // Long-poll: answer as soon as the view moves past `since`, or after 20 s.
@@ -204,7 +222,7 @@ const server = createServer(async (req, res) => {
     }
 
     if (url.pathname === '/api/state' && req.method === 'GET') {
-      return send(res, 200, { calls: engine.calls, positions: engine.book.positions, scores: engine.scores(), settings: engine.settings })
+      return send(res, 200, { orders: engine.broker.label, calls: engine.calls, positions: engine.book.positions, scores: engine.scores(), settings: engine.settings })
     }
 
     if (DEV && url.pathname === '/api/dev/message' && req.method === 'POST') {

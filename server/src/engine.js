@@ -5,31 +5,36 @@
 import { EventEmitter } from 'node:events'
 import { parseCall } from './parse.js'
 import { gradeCall, scoreboard } from './grade.js'
-import { candlesSince } from './hyperliquid.js'
+import { candlesSince } from './binance.js'
 import { PaperBook } from './paper.js'
+import { PaperBroker } from './broker.js'
 import { intentOf } from './intent.js'
 import * as V from './views.js'
 
 const LIVE_WINDOW_MS = 24 * 3_600_000 // calls older than this leave the deck
 const HISTORICAL_AFTER_MS = 15 * 60_000 // a forward older than this is graded, not traded
 const FLASH_MS = 4_000
+const DAY_MS = 86_400_000
 
 export class Engine extends EventEmitter {
   /**
    * @param {object} deps
-   * @param {ReturnType<import('./hyperliquid.js').createHyperliquid>} deps.hl
+   * @param {ReturnType<import('./binance.js').createBinance>} deps.market  market list, prices, candles
+   * @param {(book: PaperBook) => object} [deps.broker]  where tapped calls go; paper when omitted
    * @param {(text: string) => Promise<unknown>} [deps.journal]  posts to the user's Telegram
    * @param {() => number} [deps.now]
    * @param {object} [state]  persisted state from a previous run
    */
-  constructor({ hl, journal = async () => {}, now = Date.now }, state = {}) {
+  constructor({ market, broker, journal = async () => {}, now = Date.now }, state = {}) {
     super()
-    this.hl = hl
+    this.market = market
     this.journal = journal
     this.now = now
     this.calls = state.calls ?? []
     this.book = new PaperBook(state.book)
-    this.settings = { defaultSize: 50, ...state.settings }
+    this.broker = broker ? broker(this.book) : new PaperBroker(this.book)
+    this.brokerError = null
+    this.settings = { defaultSize: 50, dailyLossCap: 25, ...state.settings }
     this.chats = new Map(state.chats ?? []) // chatId -> title, for "watching N chats"
     this.seq = state.seq ?? 1
     this.universe = null
@@ -38,6 +43,8 @@ export class Engine extends EventEmitter {
     this.version = 1
     this.lastView = ''
     this.lastRegrade = 0
+    this.busy = false
+    this.ticking = false
   }
 
   toJSON() {
@@ -45,8 +52,17 @@ export class Engine extends EventEmitter {
   }
 
   async init() {
-    this.universe = await this.hl.universe()
-    this.mids = await this.hl.mids()
+    this.universe = await this.market.universe()
+    this.mids = await this.market.mids()
+    try {
+      return await this.broker.init()
+    } catch (err) {
+      // A refused demo key must not take the glasses down: fall back to paper trades.
+      this.brokerError = err.message
+      this.emit('warn', `Binance demo unavailable (${err.message}); using paper trades`)
+      this.broker = new PaperBroker(this.book)
+      return this.broker.init()
+    }
   }
 
   // ---- ingest ---------------------------------------------------------------
@@ -82,7 +98,7 @@ export class Engine extends EventEmitter {
 
   ingestReply(call) {
     const t = call.ticket
-    if (t.invalid) return `⚠️ Read a ${t.side} on ${t.coin} but skipped it: ${t.invalid}.`
+    if (t.invalid) return `⚠️ Read a ${t.side} on ${V.name(t.coin)} but skipped it: ${t.invalid}.`
     if (call.historical) {
       return `📊 ${V.describeTicket(t)}\nFrom ${call.source}, ${V.ago(this.now() - call.postedAt)}: ${V.describeGrade(call.grade)}`
     }
@@ -91,7 +107,7 @@ export class Engine extends EventEmitter {
 
   async regrade(call) {
     try {
-      const candles = await candlesSince(this.hl, call.ticket.coin, call.postedAt, this.now())
+      const candles = await candlesSince(this.market, call.ticket.coin, call.postedAt, this.now())
       if (candles) call.grade = gradeCall(call.ticket, call.postedAt, candles, this.now())
     } catch (err) {
       this.emit('warn', `grading ${call.id} failed: ${err.message}`)
@@ -100,19 +116,31 @@ export class Engine extends EventEmitter {
 
   // ---- clock ------------------------------------------------------------------
 
-  /** Called every few seconds: new prices, stops/targets, periodic regrade. */
+  /** Called every few seconds: new prices, positions closed by stop or TP1, periodic regrade. */
   async tick() {
+    if (this.ticking) return // a slow exchange must not stack ticks on top of each other
+    this.ticking = true
     try {
-      this.mids = await this.hl.mids()
+      await this.tickOnce()
+    } finally {
+      this.ticking = false
+    }
+  }
+
+  async tickOnce() {
+    try {
+      this.mids = await this.market.mids()
     } catch (err) {
       this.emit('warn', `prices failed: ${err.message}`)
       return
     }
-    for (const p of this.book.mark(this.mids, this.now())) {
-      this.flash(`${p.closeReason === 'stop' ? 'Stop hit' : 'TP1 hit'}: ${p.coin} ${V.usd(p.pnlUsd)}`)
-      this.safeJournal(V.journalClose(p, this.book.pnl(p)))
-      this.changed('closed')
+    let closed = []
+    try {
+      closed = await this.broker.sync(this.mids, this.now())
+    } catch (err) {
+      this.emit('warn', `positions failed: ${err.message}`)
     }
+    for (const p of closed) this.closedNotice(p)
     if (this.now() - this.lastRegrade > 60_000) {
       this.lastRegrade = this.now()
       const active = this.calls.filter((c) => !c.ticket.invalid && (!c.grade || ['waiting', 'open'].includes(c.grade.status)))
@@ -122,6 +150,13 @@ export class Engine extends EventEmitter {
       if (JSON.stringify(active.map((c) => c.grade ?? null)) !== before) this.emit('persist')
     }
     this.refresh()
+  }
+
+  closedNotice(p) {
+    const pnl = this.book.pnl(p)
+    this.flash(`${V.closeWhy(p.closeReason)}: ${V.name(p.coin)} ${V.usd(pnl?.usd ?? 0)}`)
+    this.safeJournal(V.journalClose(p, pnl))
+    this.changed('closed')
   }
 
   // ---- deck -------------------------------------------------------------------
@@ -162,23 +197,24 @@ export class Engine extends EventEmitter {
     const now = this.now()
     const { deck, i, card } = this.current()
     const pos = deck.length > 1 ? `   ${i + 1}/${deck.length}` : ''
+    const label = this.broker.label
     let v
     if (this.ui.mode === 'confirm' && this.ui.preview && card.kind === 'call') {
-      v = V.confirmCard(this.ui.preview, card.call)
+      v = V.confirmCard(this.ui.preview, card.call, label)
     } else if (this.ui.mode === 'close' && card.kind === 'position') {
-      const mid = this.mids[card.pos.coin]
+      const mid = this.broker.markOf(card.pos, this.mids, now)
       v = V.closeCard(card.pos, { mid, pnl: this.book.pnl(card.pos, mid) })
     } else if (card.kind === 'call') {
       const score = this.scores().find((s) => s.source === card.call.source)
-      v = V.callCard(card.call, { mid: this.mids[card.call.ticket.coin], score, size: this.size(), now, pos })
+      v = V.callCard(card.call, { mid: this.mids[card.call.ticket.coin], score, size: this.size(), now, pos, label })
     } else if (card.kind === 'position') {
-      const mid = this.mids[card.pos.coin]
+      const mid = this.broker.markOf(card.pos, this.mids, now)
       v = V.positionCard(card.pos, { mid, pnl: this.book.pnl(card.pos, mid), now, pos })
     } else if (card.kind === 'scores') {
       const graded = this.calls.filter((c) => ['tp', 'sl'].includes(c.grade?.status)).length
       v = V.scoreCard(this.scores(), { pos, graded })
     } else {
-      v = V.idleCard({ chats: this.chats.size, last: this.lastLine() })
+      v = V.idleCard({ chats: this.chats.size, last: this.lastLine(), venue: this.venueLine() })
     }
     if (this.ui.flash && this.ui.flash.until > now) v = { ...v, footer: this.ui.flash.text }
     return { ...v, kind: card.kind, cardId: card.id, mode: this.ui.mode }
@@ -186,7 +222,15 @@ export class Engine extends EventEmitter {
 
   lastLine() {
     const last = [...this.calls].reverse().find((c) => c.grade && ['tp', 'sl'].includes(c.grade.status))
-    return last ? `${last.ticket.coin} ${last.ticket.side} from ${last.source}, ${V.describeGrade(last.grade)}` : null
+    return last ? `${V.name(last.ticket.coin)} ${last.ticket.side} from ${last.source}, ${V.describeGrade(last.grade)}` : null
+  }
+
+  venueLine() {
+    if (this.broker.label === 'demo') {
+      const b = this.broker.balance
+      return `Orders: Binance demo${Number.isFinite(b) ? `, ${Math.floor(b).toLocaleString('en-US')} USDT` : ''}`
+    }
+    return this.brokerError ? 'Orders: paper (Binance demo key refused)' : 'Orders: paper (no Binance demo key)'
   }
 
   size() {
@@ -208,7 +252,7 @@ export class Engine extends EventEmitter {
       return this.changed('nav')
     }
     if (action !== 'tap') return this.view()
-    if (card.kind === 'call') return mode === 'confirm' ? this.confirmPaper(card.call) : this.startPaper(card.call)
+    if (card.kind === 'call') return mode === 'confirm' ? this.confirmTrade(card.call) : this.startTrade(card.call)
     if (card.kind === 'position') return mode === 'close' ? this.confirmClose(card.pos) : this.startClose()
     if (card.kind === 'scores') return this.postScores()
     return this.view()
@@ -223,13 +267,13 @@ export class Engine extends EventEmitter {
       case 'size':
         if (card.kind !== 'call') break
         this.ui.size = intent.usd
-        await this.startPaper(card.call)
-        this.flash(`${heard} → $${intent.usd}, tap to confirm`)
+        this.startTrade(card.call)
+        if (this.ui.mode === 'confirm') this.flash(`${heard} → $${intent.usd}, tap to confirm`)
         return this.view()
       case 'confirm':
-        if (this.ui.mode === 'confirm' && card.kind === 'call') return this.confirmPaper(card.call)
+        if (this.ui.mode === 'confirm' && card.kind === 'call') return this.confirmTrade(card.call)
         if (this.ui.mode === 'close' && card.kind === 'position') return this.confirmClose(card.pos)
-        if (card.kind === 'call') return this.startPaper(card.call)
+        if (card.kind === 'call') return this.startTrade(card.call)
         break
       case 'skip':
         if (card.kind !== 'call') break
@@ -256,31 +300,54 @@ export class Engine extends EventEmitter {
     return this.changed('voice')
   }
 
-  startPaper(call) {
-    const c = this.book.check(call, this.size(), this.mids[call.ticket.coin])
-    if (!c.ok) {
-      this.ui.mode = 'browse'
-      this.flash(`Can't paper this: ${c.reason}`)
-      return this.changed('refused')
-    }
+  /** Loss booked in the last 24 hours has reached the cap: no new trades. */
+  lossCapHit() {
+    const cap = this.settings.dailyLossCap
+    return cap > 0 && -this.book.realizedSince(this.now() - DAY_MS) >= cap
+  }
+
+  refuse(reason) {
+    this.ui.mode = 'browse'
+    this.ui.preview = null
+    this.flash(`Can't ${this.broker.label} this: ${reason}`)
+    return this.changed('refused')
+  }
+
+  startTrade(call) {
+    if (this.lossCapHit()) return this.refuse(`$${this.settings.dailyLossCap} daily loss cap reached`)
+    const c = this.broker.preview(call, this.size(), this.mids[call.ticket.coin])
+    if (!c.ok) return this.refuse(c.reason)
     this.ui.mode = 'confirm'
     this.ui.preview = c.preview
     return this.changed('confirm')
   }
 
-  async confirmPaper(call) {
-    const res = this.book.openFromCall(call, this.size(), this.mids[call.ticket.coin], this.now())
-    this.ui.mode = 'browse'
+  async confirmTrade(call) {
+    if (this.busy) return this.view() // a second tap while the order is in flight
+    if (this.lossCapHit()) return this.refuse(`$${this.settings.dailyLossCap} daily loss cap reached`)
+    this.busy = true
+    let res
+    try {
+      res = await this.broker.open(call, this.size(), this.mids[call.ticket.coin], this.now())
+    } catch (err) {
+      res = { ok: false, reason: err.message }
+    } finally {
+      this.busy = false
+    }
     this.ui.size = null
     if (!res.ok) {
-      this.flash(`Can't paper this: ${res.reason}`)
-      return this.changed('refused')
+      if (res.closed) this.safeJournal(V.journalClose(res.closed, this.book.pnl(res.closed)))
+      return this.refuse(res.reason)
     }
-    const preview = this.ui.preview ?? { risk: 0 }
+    this.ui.mode = 'browse'
     this.ui.preview = null
-    this.ui.cardId = res.position.id
-    this.flash(`Paper ${res.position.side} ${res.position.coin} opened · logged to Telegram`)
-    this.safeJournal(V.journalOpen(res.position, preview))
+    const p = res.position
+    this.ui.cardId = p.id
+    this.flash(p.venue === 'binance-demo'
+      ? `Demo ${p.side} ${V.name(p.coin)} filled at ${V.px(p.entry)} · logged to Telegram`
+      : `Paper ${p.side} ${V.name(p.coin)} opened · logged to Telegram`)
+    this.safeJournal(V.journalOpen(p))
+    if (res.closed) this.closedNotice(res.closed)
     return this.changed('opened')
   }
 
@@ -289,15 +356,24 @@ export class Engine extends EventEmitter {
     return this.changed('close?')
   }
 
-  confirmClose(pos) {
-    const res = this.book.close(pos.id, this.mids[pos.coin], 'manual', this.now())
+  async confirmClose(pos) {
+    if (this.busy) return this.view()
+    this.busy = true
+    let res
+    try {
+      res = await this.broker.close(pos, this.broker.markOf(pos, this.mids, this.now()), this.now())
+    } catch (err) {
+      res = { ok: false, reason: err.message }
+    } finally {
+      this.busy = false
+    }
     this.ui.mode = 'browse'
     if (!res.ok) {
       this.flash(`Can't close: ${res.reason}`)
       return this.changed('refused')
     }
     const pnl = this.book.pnl(res.position)
-    this.flash(`Closed ${pos.coin} ${V.usd(pnl.usd)} · logged to Telegram`)
+    this.flash(`Closed ${V.name(pos.coin)} ${V.usd(pnl.usd)} · logged to Telegram`)
     this.safeJournal(V.journalClose(res.position, pnl))
     return this.changed('closed')
   }

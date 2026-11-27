@@ -1,5 +1,6 @@
-// Paper ledger: the trades the wearer actually took from a call.
-// Live mid prices from Hyperliquid, simulated fills, no keys, no funds.
+// Ledger of the trades the wearer actually took from a call. Paper positions
+// are simulated here at the live Binance price; Binance demo positions are
+// recorded here too, but their fills and exits come from Binance (broker.js).
 
 import { round2 } from './grade.js'
 
@@ -89,10 +90,16 @@ export class PaperBook {
     return { ok: true, position: pos }
   }
 
-  /** Marks every open position; closes the ones whose stop or TP1 traded. */
+  /** Realized P&L of positions closed at or after `since` (negative = loss). */
+  realizedSince(since) {
+    return round2(this.positions.filter((p) => p.status === 'closed' && p.closedAt >= since).reduce((s, p) => s + (p.pnlUsd ?? 0), 0))
+  }
+
+  /** Marks every open paper position; closes the ones whose stop or TP1 traded. */
   mark(mids, now = Date.now()) {
     const events = []
     for (const pos of this.open()) {
+      if (pos.venue && pos.venue !== 'paper') continue // Binance closes its own positions
       const mid = mids[pos.coin]
       if (!Number.isFinite(mid)) continue
       const long = pos.side === 'long'

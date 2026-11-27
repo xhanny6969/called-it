@@ -4,7 +4,7 @@
 // always says what tap / hold / swipe will do right now.
 
 export function px(n) {
-  if (!Number.isFinite(n)) return '–'
+  if (!Number.isFinite(n)) return 'n/a'
   const a = Math.abs(n)
   if (a >= 1000) return n.toFixed(a >= 10000 ? 0 : 1)
   if (a >= 10) return n.toFixed(2)
@@ -15,7 +15,10 @@ export function px(n) {
 export const usd = (n) => (n < 0 ? '−$' : '+$') + Math.abs(n).toFixed(2)
 export const rr = (n) => (n < 0 ? '−' : '+') + Math.abs(n).toFixed(2) + 'R'
 const arrow = (side) => (side === 'long' ? '▲ LONG' : '▼ SHORT')
-const name = (coin) => coin.replace(/^k(?=[A-Z])/, '1000')
+/** Display name of a coin; Binance already lists PEPE as 1000PEPE. */
+export const name = (coin) => coin.replace(/^k(?=[A-Z])/, '1000')
+const range = (e) => (e.lo === e.hi ? px(e.lo) : `${px(e.lo)}-${px(e.hi)}`)
+const isDemo = (p) => p.venue === 'binance-demo'
 
 export function ago(ms) {
   const m = Math.max(0, Math.round(ms / 60_000))
@@ -45,11 +48,11 @@ export function lateNote(t, mid) {
   return null
 }
 
+/** The caller's report card in one line: how often TP1 came before the stop, and the average R. */
 export function record(score) {
-  if (!score || score.wins + score.losses === 0) {
-    return score?.calls > 1 ? `Caller: ${score.calls} calls, none closed yet` : 'Caller: no track record yet'
-  }
-  return `Caller: ${score.wins}W ${score.losses}L  ${rr(score.totalR)}`
+  const closed = score ? score.wins + score.losses : 0
+  if (!closed) return score?.calls > 1 ? `Caller: ${score.calls} calls, none closed yet` : 'Caller: no track record yet'
+  return `Caller: ${score.wins} of ${closed} hit TP1 first, avg ${rr(score.avgR ?? score.totalR / closed)}`
 }
 
 /** Progress of price between stop and target: SL ───●─── TP */
@@ -60,33 +63,34 @@ export function bar(sl, tp, mid, width = 12) {
   return '─'.repeat(i) + '●' + '─'.repeat(width - 1 - i)
 }
 
-export function callCard(call, { mid, score, size, now, pos }) {
+export function callCard(call, { mid, score, size, now, pos, label = 'paper' }) {
   const t = call.ticket
-  const entry = t.entry ? (t.entry.lo === t.entry.hi ? px(t.entry.lo) : `${px(t.entry.lo)}–${px(t.entry.hi)}`) : 'market'
   const late = lateNote(t, mid)
   return {
     header: `NEW CALL · ${call.source} · ${ago(now - call.postedAt)}${pos}`,
     body: [
       `${arrow(t.side)} ${name(t.coin)}${t.leverage ? `  ${t.leverage}x` : ''}`,
-      `Entry ${entry}   SL ${px(t.sl)}`,
+      record(score),
+      `Entry ${t.entry ? range(t.entry) : 'market'}   SL ${px(t.sl)}`,
       `TP ${t.tps.slice(0, 3).map(px).join(' · ')}`,
       `Now ${px(mid)}   ${late ? `${late}, too late` : zoneNote(t, mid)}`,
-      record(score),
     ].join('\n'),
-    footer: late ? 'too late to paper      hold  speak      swipe  next' : `tap  paper $${size}      hold  speak      swipe  next`,
+    footer: late ? `too late to take      hold  speak      swipe  next` : `tap  ${label} $${size}      hold  speak      swipe  next`,
   }
 }
 
-export function confirmCard(preview, call) {
+export function confirmCard(preview, call, label = 'paper') {
+  const demo = label === 'demo'
   const lines = [
     `${arrow(preview.side)} ${name(preview.coin)}   $${preview.sizeUsd} at ${px(preview.entry)}`,
     `Stop ${px(preview.sl)}    if hit  ${usd(-preview.risk)}`,
     `TP1  ${px(preview.tp)}    if hit  ${usd(preview.reward)}`,
   ]
   if (preview.chasePct) lines.push(`Chasing: ${preview.chasePct}% past the caller's zone`)
-  lines.push(`Paper trade from ${call.source}. No real funds.`)
+  else if (preview.minNote) lines.push(`Size ${preview.minNote}`)
+  lines.push(demo ? `Binance demo order, stop and TP1 set on Binance.` : `Paper trade from ${call.source}. No real funds.`)
   return {
-    header: 'CONFIRM PAPER TRADE',
+    header: demo ? 'CONFIRM BINANCE DEMO ORDER' : 'CONFIRM PAPER TRADE',
     body: lines.join('\n'),
     footer: 'tap  confirm      swipe  cancel      hold  say a size',
   }
@@ -95,12 +99,12 @@ export function confirmCard(preview, call) {
 export function positionCard(p, { mid, pnl, now, pos }) {
   const progress = p.side === 'long' ? bar(p.sl, p.tp, mid) : bar(-p.sl, -p.tp, -mid)
   return {
-    header: `PAPER POSITION · ${p.source}${pos}`,
+    header: `${isDemo(p) ? 'BINANCE DEMO' : 'PAPER POSITION'} · ${p.source}${pos}`,
     body: [
       `${arrow(p.side)} ${name(p.coin)}   $${p.sizeUsd} at ${px(p.entry)}`,
       pnl ? `Now ${px(mid)}    ${usd(pnl.usd)}   ${rr(pnl.r)}` : `Now ${px(mid)}`,
       `SL ${px(p.sl)}  ${progress}  TP ${px(p.tp)}`,
-      `Opened ${ago(now - p.openedAt)}`,
+      p.note ? p.note : `Opened ${ago(now - p.openedAt)}${isDemo(p) ? ', stop and TP1 on Binance' : ''}`,
     ].join('\n'),
     footer: 'tap  close      hold  speak      swipe  next',
   }
@@ -108,7 +112,7 @@ export function positionCard(p, { mid, pnl, now, pos }) {
 
 export function closeCard(p, { mid, pnl }) {
   return {
-    header: 'CLOSE PAPER POSITION?',
+    header: isDemo(p) ? 'CLOSE AT MARKET ON BINANCE DEMO?' : 'CLOSE PAPER POSITION?',
     body: [
       `${arrow(p.side)} ${name(p.coin)}   $${p.sizeUsd} at ${px(p.entry)}`,
       `Close at ${px(mid)}    ${pnl ? `${usd(pnl.usd)}   ${rr(pnl.r)}` : ''}`,
@@ -120,8 +124,8 @@ export function closeCard(p, { mid, pnl }) {
 export function scoreCard(scores, { pos, graded }) {
   const top = scores.filter((s) => s.wins + s.losses > 0).slice(0, 4)
   const body = top.length
-    ? top.map((s, i) => `${i + 1}. ${s.source.slice(0, 24)}   ${s.wins}W ${s.losses}L   ${rr(s.totalR)}`).join('\n')
-    : 'No closed calls yet.\nForward a caller\'s old calls to the bot\nand they are graded on Hyperliquid.'
+    ? top.map((s, i) => `${i + 1}. ${s.source.slice(0, 22)}   ${s.wins}/${s.wins + s.losses} TP1   avg ${rr(s.avgR)}`).join('\n')
+    : 'No closed calls yet.\nForward a caller\'s old calls to the bot\nand they are graded on Binance candles.'
   return {
     header: `CALLER SCORES · ${graded} calls graded${pos}`,
     body,
@@ -129,45 +133,59 @@ export function scoreCard(scores, { pos, graded }) {
   }
 }
 
-export function idleCard({ chats, last }) {
+export function idleCard({ chats, last, venue }) {
   return {
     header: 'CALLEDIT',
     body: [
       `Watching ${chats} Telegram chat${chats === 1 ? '' : 's'}.`,
       'No open calls right now.',
       last ? `Last: ${last}` : 'Calls show up here the moment they are posted.',
+      ...(venue ? [venue] : []),
     ].join('\n'),
     footer: 'hold  speak      swipe  scores',
   }
 }
 
+/** Short reason a position closed, for the flash line and the journal. */
+export function closeWhy(reason) {
+  switch (reason) {
+    case 'stop': return 'Stop hit'
+    case 'tp1': return 'TP1 hit'
+    case 'binance': return 'Closed on Binance'
+    case 'safety': return 'Closed, stop order refused'
+    default: return 'Closed from G2'
+  }
+}
+
 // ---- Telegram journal lines -------------------------------------------------
 
-export function journalOpen(p, preview) {
+export function journalOpen(p) {
+  const risk = p.qty * Math.abs(p.entry - p.sl)
   return [
-    `📓 Paper ${p.side.toUpperCase()} ${name(p.coin)} $${p.sizeUsd} @ ${px(p.entry)}`,
-    `SL ${px(p.sl)} · TP1 ${px(p.tp)} · risk ${usd(-preview.risk)}`,
+    `📓 ${isDemo(p) ? 'Binance demo' : 'Paper'} ${p.side.toUpperCase()} ${name(p.coin)} $${p.sizeUsd} @ ${px(p.entry)}`,
+    `SL ${px(p.sl)} · TP1 ${px(p.tp)} · risk ${usd(-risk)}`,
     `Call from ${p.source} · tapped on Even G2`,
   ].join('\n')
 }
 
 export function journalClose(p, pnl) {
-  const icon = p.closeReason === 'stop' ? '🛑' : p.closeReason === 'tp1' ? '✅' : '↩️'
-  const why = p.closeReason === 'stop' ? 'stop hit' : p.closeReason === 'tp1' ? 'TP1 hit' : 'closed from G2'
-  return `${icon} ${name(p.coin)} ${p.side} ${why} @ ${px(p.exit)}  ${usd(pnl.usd)} (${rr(pnl.r)})\nCall from ${p.source}`
+  const icon = p.closeReason === 'stop' ? '🛑' : p.closeReason === 'tp1' ? '✅' : p.closeReason === 'safety' ? '⚠️' : '↩️'
+  const why = closeWhy(p.closeReason).replace(/^(Stop|Closed)/, (w) => w.toLowerCase())
+  const venue = isDemo(p) ? ' (Binance demo)' : ''
+  return `${icon} ${name(p.coin)} ${p.side} ${why} @ ${px(p.exit)}  ${usd(pnl?.usd ?? 0)} (${rr(pnl?.r ?? 0)})${venue}\nCall from ${p.source}`
 }
 
 export function journalScores(scores) {
   const rows = scores.slice(0, 10).map((s, i) => {
-    const wr = s.winRate == null ? '–' : `${Math.round(s.winRate * 100)}%`
-    return `${i + 1}. ${s.source}: ${s.wins}W ${s.losses}L (${wr}), ${rr(s.totalR)}, ${s.open} open`
+    const closed = s.wins + s.losses
+    if (!closed) return `${i + 1}. ${s.source}: no closed calls yet, ${s.open} open`
+    return `${i + 1}. ${s.source}: ${s.wins} of ${closed} hit TP1 first (${Math.round(s.winRate * 100)}%), avg ${rr(s.avgR)}, total ${rr(s.totalR)}, ${s.open} open`
   })
-  return ['🏁 Caller scores (TP1 before stop, Hyperliquid candles)', ...rows].join('\n')
+  return ['🏁 Caller scores (TP1 before the stop, Binance futures candles)', ...rows].join('\n')
 }
 
 export function describeTicket(t) {
-  const entry = t.entry ? (t.entry.lo === t.entry.hi ? px(t.entry.lo) : `${px(t.entry.lo)}–${px(t.entry.hi)}`) : 'market'
-  return `${t.side.toUpperCase()} ${name(t.coin)} · entry ${entry} · SL ${px(t.sl)} · TP ${t.tps.map(px).join(' / ')}`
+  return `${t.side.toUpperCase()} ${name(t.coin)} · entry ${t.entry ? range(t.entry) : 'market'} · SL ${px(t.sl)} · TP ${t.tps.map(px).join(' / ')}`
 }
 
 export function describeGrade(g) {

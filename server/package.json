@@ -3,12 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "CalledIt backend: Telegram trade-call parser, Hyperliquid grading, paper ledger, speech-to-text for the Even G2 app.",
+  "description": "CalledIt backend: Telegram trade-call parser, caller grading on Binance USD-M candles, Binance demo orders, speech-to-text for the Even G2 app.",
   "scripts": {
     "start": "node src/server.js",
     "demo": "node src/server.js --dev",
     "test": "node --test test/",
-    "fetch-model": "node scripts/fetch-model.js"
+    "fetch-model": "node scripts/fetch-model.js",
+    "check-binance": "node scripts/check-binance.js"
   },
   "engines": {
     "node": ">=20"

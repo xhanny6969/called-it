@@ -8,7 +8,7 @@
   "permissions": [
     {
       "name": "network",
-      "desc": "Talks to your own CalledIt server for calls, prices, paper trades and speech-to-text.",
+      "desc": "Talks to your own CalledIt server for calls, prices, Binance demo orders and speech-to-text.",
       "whitelist": [
         "http://127.0.0.1:8787",
         "http://localhost:8787"
@@ -16,7 +16,7 @@
     },
     {
       "name": "g2-microphone",
-      "desc": "Push-to-talk: hold the touchpad and say \"paper fifty\", \"skip\" or \"close it\"."
+      "desc": "Push-to-talk: hold the touchpad and say \"take fifty\", \"skip\" or \"close it\"."
     }
   ],
   "supported_languages": [

@@ -7,6 +7,7 @@
 
 import { writeFile, mkdir } from 'node:fs/promises'
 import { parseCall } from '../server/src/parse.js'
+import { createBinance } from '../server/src/binance.js'
 
 const [name, daysArg = '200', pagesArg = '60'] = process.argv.slice(2)
 if (!name) { console.error('usage: node tools/tg-history.mjs <channel> [days] [maxPages]'); process.exit(1) }
@@ -30,8 +31,7 @@ async function page(before) {
   return posts
 }
 
-const meta = await fetch('https://api.hyperliquid.xyz/info', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"type":"meta"}' }).then((r) => r.json())
-const universe = new Set(meta.universe.filter((u) => !u.isDelisted).map((u) => u.name))
+const universe = await createBinance().universe()
 
 const all = new Map()
 let before = null
